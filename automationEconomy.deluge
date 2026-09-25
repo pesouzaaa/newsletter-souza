@@ -1,0 +1,167 @@
+map boletimDiario()
+{
+resultado = Map();
+diaSemana = zoho.currentdate.getDayOfWeek();
+if(diaSemana == 1 || diaSemana == 7)
+{
+	info "Fim de semana: boletim não enviado.";
+	return resultado;
+}
+//LÓGICA DAS COTACOES
+try 
+{
+	resposta = invokeurl
+	[
+		url :"https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL,CNY-BRL"
+		type :GET
+	];
+	linhas = "";
+	graficos = "";
+	for each  chave in resposta.keys()
+	{
+		dados = resposta.get(chave);
+		nome = dados.get("name").getPrefix("/");
+		// 		valor = dados.get("bid").toDecimal().round(2);
+		bruto = dados.get("bid").toDecimal();
+		if(bruto < 1)
+		{
+			valor = bruto.round(4);
+		}
+		else
+		{
+			valor = bruto.round(2);
+		}
+		variacao = dados.get("pctChange").toDecimal().round(2);
+		cor = "#666666";
+		if(variacao > 0)
+		{
+			cor = "#1a7f37";
+		}
+		else if(variacao < 0)
+		{
+			cor = "#cf222e";
+		}
+		linhas = linhas + "<tr><td>" + nome + "</td><td>R$ " + valor + "</td><td><span style='color:" + cor + "'>" + variacao + "%</span></td></tr>";
+		par = dados.get("code") + "-" + dados.get("codein");
+		historico = invokeurl
+		[
+			url :"https://economia.awesomeapi.com.br/json/daily/" + par + "/30"
+			type :GET
+		];
+		serie = "";
+		rotulos = "";
+		for each  dia in historico
+		{
+			cotacao = dia.get("bid");
+			dataDia = (dia.get("timestamp").toLong() * 1000).toTime().toString("dd/MM");
+			if(serie == "")
+			{
+				serie = cotacao;
+				rotulos = "'" + dataDia + "'";
+			}
+			else
+			{
+				serie = cotacao + "," + serie;
+				rotulos = "'" + dataDia + "'," + rotulos;
+			}
+		}
+		config = "{type:'line',data:{labels:[" + rotulos + "],datasets:[{data:[" + serie + "],fill:false,borderColor:'#1a73e8',pointRadius:0}]},options:{legend:{display:false},scales:{yAxes:[{ticks:{beginAtZero:false}}]}}}";
+		urlGrafico = "https://quickchart.io/chart?w=600&h=300&c=" + encodeUrl(config);
+		info urlGrafico;
+		graficos = graficos + "<h3>" + nome + " - últimos 30 dias</h3><img src='" + urlGrafico + "' width='600' height='300'>";
+	}
+	tabela = "<table border='1' cellpadding='8' style='border-collapse:collapse'><tr><th>Moeda</th><th>Valor</th><th>Variação</th></tr>" + linhas + "</table>";
+	//LÓGICA DAS NOTICIAS
+	secaoNoticia = "";
+	try 
+	{
+		feeds = {"Tecnologia":"https://g1.globo.com/rss/g1/tecnologia/","Negócios":"https://g1.globo.com/rss/g1/economia/","Brasil":"https://g1.globo.com/rss/g1/politica/"};
+		categorias = feeds.keys();
+		categoria = categorias.get(randomNumber(0,categorias.size()));
+		resposta = invokeurl
+		[
+			url :feeds.get(categoria)
+			type :GET
+		];
+		itens = resposta.executeXPath("/rss/channel/item").toXmlList();
+		total = itens.size();
+		limite = 20;
+		if(total < limite)
+		{
+			limite = total;
+		}
+		sorteado = randomNumber(1,limite + 1);
+		info sorteado;
+		titulo = resposta.executeXPath("/rss/channel/item[" + sorteado + "]/title/text()");
+		link = resposta.executeXPath("/rss/channel/item[" + sorteado + "]/link/text()");
+		secaoNoticia = "<h2>Notícia do dia</h2><p><b>" + categoria + ":</b> <a href='" + link + "'>" + titulo + "</a></p>";
+	}
+	catch (erroNoticia)
+	{
+		info "Falha na notícia: " + erroNoticia.message;
+		secaoNoticia = "<h2>Notícia do dia</h2><p>Não foi possível buscar a notícia hoje. " + erroNoticia.message + "</p>";
+	}
+	//LÓGICA DOS ETFs	
+	secaoIndices = "";
+	if(diaSemana == 2)
+	{
+		try 
+		{
+			ativos = {"DIVO11.SA":"DIVO11","^GSPC":"S&P 500","^STOXX":"STOXX 600"};
+			linhasIndices = "";
+			for each  ticker in ativos.keys()
+			{
+				respostaIndice = invokeurl
+				[
+					url :"https://query1.finance.yahoo.com/v8/finance/chart/" + encodeUrl(ticker) + "?range=5d&interval=1d"
+					type :GET
+					headers:{"User-Agent":"Mozilla/5.0"}
+				];
+				meta = respostaIndice.get("chart").get("result").get(0).get("meta");
+				preco = meta.get("regularMarketPrice");
+				anterior = meta.get("chartPreviousClose");
+				variacaoSemana = ((preco / anterior - 1) * 100).round(2);
+				cor = "#666666";
+				if(variacaoSemana > 0)
+				{
+					cor = "#1a7f37";
+				}
+				else if(variacaoSemana < 0)
+				{
+					cor = "#cf222e";
+				}
+				linhasIndices = linhasIndices + "<tr><td>" + ativos.get(ticker) + "</td><td>" + preco + "</td><td><span style='color:" + cor + "'>" + variacaoSemana + "%</span></td></tr>";
+			}
+			secaoIndices = "<h2>Resumo da semana</h2><table border='1' cellpadding='8' style='border-collapse:collapse'><tr><th>Ativo</th><th>Valor</th><th>Variação (5 dias)</th></tr>" + linhasIndices + "</table>";
+		}
+		catch (erroIndices)
+		{
+			info "Falha nos índices: " + erroIndices.message;
+			secaoIndices = "<h2>Resumo da semana</h2><p>Não foi possível buscar os índices hoje. " + erroIndices.message + "</p>";
+		}
+	}
+	//ENVIO DO E-MAIL
+	sendmail
+	[
+		from :zoho.adminuserid
+		to :"SEU-EMAIL"
+		subject :"Boletim diário"
+		message :"<h2>Cotações de hoje</h2>" + tabela + graficos + secaoNoticia + secaoIndices
+	]
+	resultado.put("tabela",tabela);
+}
+catch (e)
+{
+	erro = "Erro na linha " + e.lineNo + ": " + e.message;
+	info erro;
+	sendmail
+	[
+		from :zoho.adminuserid
+		to :"SEU-EMAIL"
+		subject :"Falha no boletim diário"
+		message :"O boletim não pôde ser gerado hoje. " + erro
+	]
+	resultado.put("erro",erro);
+}
+return resultado;
+}
